@@ -187,7 +187,7 @@ devTinder/
 You need **Node.js 22+** and a **MongoDB** connection string (a free [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) cluster works).
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/devTinder.git
+git clone https://github.com/shivampeed/devTinder.git
 cd devTinder
 cp backend/.env.example backend/.env    # then fill in the values below
 npm install                             # installs backend and frontend too
@@ -223,10 +223,6 @@ Typing indicators and read receipts in chat. Photo uploads (S3 or Cloudinary) in
 
 ---
 
-## Acknowledgements
-
-Built while following **[Namaste Node.js](https://namastedev.com/learn/namaste-node)** by Akshay Saini, then extended with WebSocket authentication, online status, paginated chat history, the email queue, and the Netlify + Render deployment.
-
 ## Author
 
-**Shivam Deep**: [GitHub](https://github.com/YOUR_USERNAME) · [LinkedIn](https://www.linkedin.com/in/YOUR_PROFILE)
+**Shivam Deep**: [GitHub](https://github.com/shivampeed) · [LinkedIn](https://www.linkedin.com/in/YOUR_PROFILE)
