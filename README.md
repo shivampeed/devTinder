@@ -1,222 +1,232 @@
-# DevTinder
+# 👩‍💻 DevTinder
 
-A "Tinder for developers" app. You sign up, fill in your profile, swipe through other developers, send requests, and accept or reject the ones you get.
+**A full-stack app where developers find each other, match, and chat in real time.** Think Tinder, but for finding someone to build with.
+
+![React](https://img.shields.io/badge/React_19-20232A?logo=react&logoColor=61DAFB)
+![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)
+![Express](https://img.shields.io/badge/Express-000000?logo=express&logoColor=white)
+![MongoDB](https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white)
+![Socket.IO](https://img.shields.io/badge/Socket.IO-010101?logo=socketdotio&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?logo=tailwindcss&logoColor=white)
+
+**Live demo:** _add your Netlify link here_
+
+<p>
+  <img src="docs/screenshots/feed.png" alt="Feed: one developer at a time with Ignore and Interested buttons" width="49%" />
+  <img src="docs/screenshots/chat.png" alt="Real-time chat with online status" width="49%" />
+</p>
+
+---
+
+## Features
+
+**Accounts.** Sign up and log in with email and password. Passwords are hashed with bcrypt, and the session lives in an `httpOnly` cookie holding a JWT, so page scripts can never read it.
+
+**Profile.** Edit your name, photo, age, gender, bio and skills, with a live preview of the card other developers will see.
+
+**Feed.** Browse developers one card at a time and choose **Interested** or **Ignore**. The feed never shows you yourself or anyone you already have a request with, and it's paginated on the server.
+
+**Requests and matches.** People who are interested in you appear under Requests. **Accept** turns them into a connection.
+
+**Real-time chat.** Matched developers can message each other instantly over WebSockets. Messages are saved, and older ones load 30 at a time.
+
+**Online status.** A green dot shows which connections are online right now; otherwise you see "Last seen 2 hours ago". Only your connections can see this about you.
+
+**Email notifications.** An email goes out when someone is interested in you, plus a daily 8 AM reminder about pending requests (Amazon SES + a cron job).
+
+**Responsive dark UI.** Works on desktop and phone screens.
+
+## Screenshots
+
+| Connections with online status | Connection requests |
+|---|---|
+| ![Connections](docs/screenshots/connections.png) | ![Requests](docs/screenshots/requests.png) |
+| **Edit profile with live preview** | **Login** |
+| ![Profile](docs/screenshots/profile.png) | ![Login](docs/screenshots/login.png) |
+
+<p align="center">
+  <img src="docs/screenshots/mobile-chat.png" alt="Chat on a phone screen" width="280" />
+  <br /><em>Chat on a phone screen</em>
+</p>
+
+---
+
+## Tech stack
+
+| Area | Tools |
+|---|---|
+| Frontend | React 19, Vite, Redux Toolkit, React Router, Tailwind CSS 4, daisyUI 5, Axios |
+| Backend | Node.js, Express, Mongoose, JSON Web Tokens, bcryptjs, validator |
+| Real-time | Socket.IO (server and client) |
+| Database | MongoDB Atlas |
+| Email and jobs | Amazon SES (AWS SDK v3), node-cron, date-fns |
+| Hosting | Netlify (frontend), Render (backend), MongoDB Atlas (database) |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    B["Browser<br/>React + Redux"] -->|"HTTPS: page + /api/*"| N["Netlify<br/>static site + /api proxy"]
+    N -->|"REST API, cookie auth"| R["Render<br/>Node.js + Express + Socket.IO"]
+    B <-->|"WebSocket: chat + online status"| R
+    R -->|"Mongoose"| M[("MongoDB Atlas")]
+    R -->|"AWS SDK v3"| S["Amazon SES<br/>emails"]
+```
+
+The browser only ever talks to the Netlify address for normal requests. Netlify forwards everything under `/api` to the Express server on Render, so the login cookie is a normal first-party cookie. The one exception is the live chat connection, which goes straight to Render because Netlify's forwarding can't carry WebSockets.
+
+---
+
+## Engineering highlights
+
+These are the problems that took the most thought, and how they were solved.
+
+**1. Login cookies that work across two hosts.** The frontend (Netlify) and backend (Render) live on different domains. A cookie set by the backend's domain counts as a third-party cookie, and Safari blocks those by default. Instead of loosening the cookie to `SameSite=None`, Netlify proxies `/api/*` to the backend. To the browser it's all one site, so the cookie stays `httpOnly`, `SameSite=Lax` and `Secure`.
+
+**2. Authenticated WebSockets.** Because the socket connects straight to Render, it can't use that cookie. The client first calls `GET /socket-token` (authenticated by the cookie) and gets a JWT that lasts 5 minutes and is marked for socket use only. The socket middleware checks it on every connect and reconnect. The sender's identity always comes from the server, never from the message the browser sends, and a user can only join a chat room after the server confirms the two people are actually connected.
+
+**3. Online status and "last seen".** The server keeps an in-memory map of `userId -> number of open tabs`, so closing one of two tabs doesn't mark you offline. When your first tab connects or your last tab closes, the server tells only your connections, through a private room each user joins (`user:<id>`). `lastSeen` is saved to MongoDB when the last tab disconnects.
+
+**4. Chat history that scales.** Each message is its own document instead of one ever-growing array inside the chat. That keeps documents small (MongoDB caps a document at 16 MB), and with a compound index on `{ chatId, _id }` the newest 30 messages are a single indexed query. Older pages use cursor pagination (`?before=<messageId>`), fetching `limit + 1` rows to know whether more exist.
+
+**5. Race conditions in chat.** If both people send their first message at the same moment, two chat documents could be created. A unique `participantsKey` (both user ids, sorted) prevents that, and the losing request retries by reading the chat that now exists. Messages from one user are also processed through a per-socket promise chain, so fast typing can never save them out of order.
+
+**6. Feed and request rules.** The feed excludes everyone you already have a request with, using `$nin` on a set built from your requests, with `skip`/`limit` pagination. Connection requests have a compound index, a `pre("save")` hook that blocks sending a request to yourself, and checks for duplicates in both directions.
+
+**7. Free-tier cold starts.** Render's free plan sleeps after 15 minutes idle and takes about a minute to wake up, which is longer than Netlify's proxy timeout. The app detects this, shows "Waking up the server..." and keeps retrying, instead of showing an error.
+
+**8. Email without getting throttled.** Amazon SES limits how fast you can send. Emails go through a small in-process queue that sends them one at a time with a gap between them, so an API request never waits for an email. User-written text is HTML-escaped before it goes into an email, and the daily job runs on India time even though the server runs on UTC.
+
+---
+
+## API reference
+
+| Method | Endpoint | What it does |
+|---|---|---|
+| POST | `/signup` | Create an account and log in |
+| POST | `/login` | Log in, sets the auth cookie |
+| POST | `/logout` | Clear the auth cookie |
+| GET | `/profile/view` | The logged-in user's profile |
+| PATCH | `/profile/edit` | Update profile fields (allow-listed) |
+| GET | `/feed?page=1&limit=10` | Developers you haven't acted on yet |
+| POST | `/request/send/:status/:toUserId` | `interested` or `ignored` |
+| POST | `/request/review/:status/:requestId` | `accepted` or `rejected` |
+| GET | `/user/requests/received` | Pending requests sent to you |
+| GET | `/user/connections` | Your matches, with online status and last seen |
+| GET | `/chat/:targetUserId?before=<id>` | Chat history, 30 messages per page |
+| GET | `/socket-token` | Short-lived token for the WebSocket |
+| GET | `/health` | Health check |
+
+**Socket.IO events.** The client sends `joinChat`, `leaveChat` and `sendMessage`. The server sends `messageReceived`, `presenceChanged` and `chatError`.
+
+## Data model
+
+```mermaid
+erDiagram
+    USER ||--o{ CONNECTION_REQUEST : "sends / receives"
+    USER ||--o{ MESSAGE : sends
+    CHAT ||--o{ MESSAGE : contains
+    USER }o--o{ CHAT : "takes part in"
+
+    USER {
+        ObjectId _id PK
+        string firstName
+        string lastName
+        string emailId UK
+        string password "bcrypt hash"
+        number age
+        string gender
+        string photoUrl
+        string about
+        array skills
+        date lastSeen
+    }
+    CONNECTION_REQUEST {
+        ObjectId fromUserId FK
+        ObjectId toUserId FK
+        string status "ignored, interested, accepted, rejected"
+    }
+    CHAT {
+        array participants
+        string participantsKey UK
+    }
+    MESSAGE {
+        ObjectId chatId FK
+        ObjectId senderId FK
+        string text
+        date createdAt
+    }
+```
+
+## Project structure
 
 ```
 devTinder/
-  backend/    Node + Express + MongoDB API (runs on port 7777)
-  frontend/   React + Vite + Tailwind + daisyUI (runs on port 5173)
+├── backend/                 Express API + Socket.IO
+│   └── src/
+│       ├── app.js           server setup, routes, startup checks
+│       ├── config/          MongoDB connection
+│       ├── middlewares/     auth (JWT from cookie)
+│       ├── models/          User, ConnectionRequest, Chat, Message
+│       ├── routes/          auth, profile, request, user, chat
+│       └── utils/           socket, presence, email queue, cron, validation
+├── frontend/                React + Vite app
+│   ├── src/
+│   │   ├── components/      Feed, Profile, Requests, Connections, Chat, ...
+│   │   └── utils/           Redux slices, socket client, helpers
+│   ├── scripts/             writes Netlify's /api proxy rule at build time
+│   └── netlify.toml
+├── docs/                    setup guide and screenshots
+└── package.json             runs backend + frontend together
 ```
-
-The frontend always calls the API at `/api`. On your Mac, Vite forwards `/api` to the backend. On Netlify, Netlify forwards `/api` to your hosted backend. Because the browser only ever talks to one address, the login cookie works the same way everywhere, including in Safari.
 
 ---
 
-## Part 1: Run it on your MacBook
+## Run it locally
 
-### 1. Install Node.js
-
-You need Node.js 22 or newer. Download the LTS installer from https://nodejs.org, or if you use Homebrew run `brew install node`. Then check it in Terminal:
+You need **Node.js 22+** and a **MongoDB** connection string (a free [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) cluster works).
 
 ```bash
-node -v    # should print v22.x or higher
+git clone https://github.com/YOUR_USERNAME/devTinder.git
+cd devTinder
+cp backend/.env.example backend/.env    # then fill in the values below
+npm install                             # installs backend and frontend too
+npm run dev                             # API on :7777, app on :5173
 ```
 
-### 2. Get a MongoDB database
+Open **http://localhost:5173**.
 
-The easiest choice is a free MongoDB Atlas cluster, because you can use the same database later when the app is online.
-
-1. Sign up at https://www.mongodb.com/cloud/atlas and create a free cluster.
-2. Under Security, add a **database user** with a username and password. Write the password down.
-3. Under **Network Access**, add the IP address `0.0.0.0/0` (allow from anywhere). Your Mac and Render both need to reach the database, and Render's address changes.
-4. Click **Connect > Drivers** and copy the connection string. It looks like this:
-   `mongodb+srv://USERNAME:PASSWORD@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority`
-5. Put your real password in it, and add the database name `devTinder` right before the `?`:
-   `mongodb+srv://USERNAME:PASSWORD@cluster0.abcde.mongodb.net/devTinder?retryWrites=true&w=majority`
-
-Use a database password with only letters and numbers. Symbols like `@`, `#` or `/` break the connection string.
-
-Prefer MongoDB on your Mac instead? Run `brew tap mongodb/brew && brew install mongodb-community && brew services start mongodb-community` and use `mongodb://127.0.0.1:27017/devTinder` as the connection string.
-
-### 3. Add your settings
-
-Open Terminal in the `devTinder` folder (for example `cd ~/Downloads/devTinder`) and run:
-
-```bash
-cp backend/.env.example backend/.env
-openssl rand -hex 32        # copy this output, it is your JWT_SECRET
-open -e backend/.env        # opens the file in TextEdit
-```
-
-Fill in `DB_CONNECTION_SECRET` (your connection string from step 2) and `JWT_SECRET` (the random text from `openssl`). Save the file. The other lines can stay as they are.
-
-### 4. Install and start
-
-```bash
-npm install     # installs everything for the root, backend and frontend
-npm run dev     # starts the backend and the frontend together
-```
-
-Open **http://localhost:5173** in your browser. Press `Ctrl + C` in Terminal to stop both.
-
-You can also run them in two separate Terminal tabs: `cd backend && npm run dev` and `cd frontend && npm run dev`.
-
-### If something goes wrong
-
-**"Missing environment variables"** means `backend/.env` is missing or a value is empty. Go back to step 3.
-
-**"Database cannot be connected"** usually means a wrong password in the connection string, a password with special symbols, or that `0.0.0.0/0` is missing from Atlas Network Access.
-
-**"Can't reach the server"** in the browser means the backend is not running. Look at the `[api]` lines in Terminal for the real error.
-
-**"Port 7777 is already in use"**: the app is probably already running in another Terminal window. Stop it there with `Ctrl + C`. If you can't find it, `lsof -i :7777` shows what is using the port.
-
-**npm says "5 high severity vulnerabilities" while installing the frontend**: these are inside Vite's build tools on your Mac, not in the app people use, and there is no fixed version yet. Do not run `npm audit fix --force`, because it downgrades Vite and breaks the build.
-
-**Sign up fails with a password error**: the password needs at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, for example `Hello@123`.
-
----
-
-## Part 2: Put it online
-
-Netlify only hosts static websites, so it can run the frontend but not the Express server. The plan is:
-
-| Part | Where | Cost |
+| Variable | Required | Description |
 |---|---|---|
-| Frontend | Netlify | Free |
-| Backend | Render (web service) | Free |
-| Database | MongoDB Atlas (the one you made in Part 1) | Free |
+| `DB_CONNECTION_SECRET` | Yes | MongoDB connection string |
+| `JWT_SECRET` | Yes | Long random string, e.g. `openssl rand -hex 32` |
+| `PORT` | No | API port, default `7777` |
+| `FRONTEND_URL` | No | Allowed frontend address(es) for CORS |
+| `NODE_ENV` | No | `production` on the server, for https-only cookies |
+| `AWS_ACCESS_KEY`, `AWS_SECRET_KEY`, `SES_FROM_EMAIL`, `AWS_REGION` | No | Turns on emails |
 
-### Step A: Put the code on GitHub
+A step-by-step beginner guide (Atlas setup, troubleshooting, deployment) is in **[docs/SETUP.md](docs/SETUP.md)**.
 
-Create an empty repository on GitHub (for example `devTinder`), then in the `devTinder` folder run:
+## Deployment
 
-```bash
-git init
-git add .
-git commit -m "DevTinder"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/devTinder.git
-git push -u origin main
-```
+| Part | Platform | Settings |
+|---|---|---|
+| Backend | Render web service | Root directory `backend`, build `npm install`, start `npm start`, env vars from the table above |
+| Frontend | Netlify | Base directory `frontend` (reads `netlify.toml`), env var `BACKEND_URL` = the Render address |
+| Database | MongoDB Atlas | Allow access from `0.0.0.0/0` so Render can connect |
 
-Your `backend/.env` file is in `.gitignore`, so your passwords will not be uploaded. Keep it that way.
+At build time, `BACKEND_URL` becomes the `/api` proxy rule and the chat's WebSocket address, so the frontend code contains no hardcoded server URLs.
 
-### Step B: Deploy the backend on Render
+## What I'd build next
 
-1. Sign up at https://render.com with your GitHub account.
-2. Click **New > Web Service** and pick your `devTinder` repository.
-3. Fill in:
-   - **Root Directory:** `backend`
-   - **Runtime / Language:** Node
-   - **Build Command:** `npm install`
-   - **Start Command:** `npm start`
-   - **Instance Type:** Free
-4. Under **Environment Variables**, add:
-   - `DB_CONNECTION_SECRET` = your Atlas connection string
-   - `JWT_SECRET` = a long random string (you can reuse the one from your `.env`)
-   - `NODE_ENV` = `production`
-5. Optional: under Advanced, set **Health Check Path** to `/health`.
-6. Click **Deploy**. When it finishes, copy your backend address, for example `https://devtinder-api.onrender.com`. Open that address with `/health` at the end; you should see `{"status":"ok"}`.
-
-### Step C: Deploy the frontend on Netlify
-
-1. Sign up at https://www.netlify.com with your GitHub account.
-2. Add a new site/project and choose **Import an existing project** from GitHub. Pick your `devTinder` repository.
-3. Set **Base directory** to `frontend`. Netlify then reads `frontend/netlify.toml`, which already sets the build command (`npm run build:netlify`) and the publish folder (`dist`).
-4. Add an environment variable:
-   - `BACKEND_URL` = your Render address from Step B, for example `https://devtinder-api.onrender.com`
-5. Click **Deploy**. Open your `.netlify.app` address and sign up.
-
-If the Netlify build stops with "BACKEND_URL is not set", add the variable from step 4 and click **Retry deploy**.
-
-### Good to know
-
-**The first visit can be slow.** Render's free server goes to sleep after 15 minutes with no visitors, and takes about a minute to wake up. The app shows "Waking up the server..." and keeps trying on its own, so just wait. A paid Render plan removes the sleep.
-
-**Updating the site** is just `git add . && git commit -m "my change" && git push`. Render and Netlify both rebuild on their own.
-
-**Emails are optional.** Email sending is switched off until you add your AWS keys (see "Turning on emails" below). The app runs fine without it.
-
-**Chat and online status work online with no extra settings.** Netlify's `/api` forwarding can't carry live chat connections, so the chat page connects straight to your Render address. It gets that address from the same `BACKEND_URL` variable when Netlify builds the site. If you change `BACKEND_URL` later, click **Trigger deploy** in Netlify so the chat picks up the new address.
-
-### Optional: your own domain name (like devtinder.in)
-
-1. Buy a domain from any seller (GoDaddy, Namecheap, Hostinger and so on).
-2. In Netlify, open your site, go to **Domain management**, and click **Add a domain**. Type your domain and follow the steps.
-3. Netlify shows you exactly which DNS records to add. You can either switch your domain's nameservers to Netlify (simplest), or add the records at your domain seller or at Cloudflare. If you use Cloudflare like in the course notes, set the records to **DNS only** (grey cloud), so Netlify can create the HTTPS certificate.
-4. Wait for DNS to update (from a few minutes to a few hours). Netlify then turns on HTTPS by itself.
-
-Nothing in the code or on Render needs to change, because the site keeps calling `/api` on whatever domain it's opened from.
-
-### Optional: turning on emails (Amazon SES)
-
-With email on, people get an email when someone clicks **Interested** on them, and a reminder at 8 AM (India time) if they got requests the day before.
-
-1. In AWS, open **Amazon SES** in the **Mumbai (ap-south-1)** region and verify the email address (or domain) you'll send from.
-2. New SES accounts start in "sandbox" mode, where you can only send to addresses you've verified too. To email anyone, request **production access** in SES.
-3. In **IAM**, create a user with the `AmazonSESFullAccess` permission, then create an **access key** for it under Security credentials.
-4. Add these to `backend/.env` on your Mac, and to Render's environment variables when you deploy:
-   - `AWS_ACCESS_KEY` and `AWS_SECRET_KEY` = the access key from step 3
-   - `SES_FROM_EMAIL` = the address you verified in step 1
-
-The server prints "Email is set up" when it starts if it found them. On Render's free plan the server sleeps when nobody is using it, so the 8 AM reminder only runs if the server happens to be awake then.
+Typing indicators and read receipts in chat. Photo uploads (S3 or Cloudinary) instead of photo links. A Redis adapter so Socket.IO and online status work across several server instances (today the online list lives in one server's memory). Rate limiting on login and signup. Automated tests with Jest and Supertest for the API, and Playwright for the main user flows.
 
 ---
 
-## Using the app
+## Acknowledgements
 
-**Sign up / Login.** The password needs 8+ characters with an uppercase letter, a lowercase letter, a number and a symbol.
+Built while following **[Namaste Node.js](https://namastedev.com/learn/namaste-node)** by Akshay Saini, then extended with WebSocket authentication, online status, paginated chat history, the email queue, and the Netlify + Render deployment.
 
-**Profile** (click your photo at the top right > Profile). Edit your name, photo link, age, gender, about and skills. The card on the right shows how others see you.
+## Author
 
-**Feed** (click the DevTinder logo). One developer at a time. **Interested** sends them a request, **Ignore** skips them. Each person only shows up once.
-
-**Requests.** People who were Interested in you. **Accept** makes you connections.
-
-**Connections.** Everyone you've matched with. A **green dot** and "Online" mean they have DevTinder open right now; otherwise it says "Last seen 2 hours ago". Only your connections can see this about you.
-
-**Chat** (the button on each connection). Real-time messages. The newest 30 load first; scroll up and click **Load earlier messages** for older ones. People who aren't your connections can't open your chat.
-
-To try it alone, sign up a second account in a private window (**Cmd + Shift + N**), so both accounts stay logged in at the same time.
-
----
-
-## Your course notes vs this project
-
-| From the notes | Status |
-|---|---|
-| Frontend: router, login, Redux, feed, profile, toast, connections, requests, signup | Done |
-| Deployment (AWS EC2 + nginx + pm2) | Done differently: Netlify + Render (Part 2), free and simpler |
-| Custom domain | Steps above, using Netlify instead of nginx |
-| Emails with Amazon SES, made dynamic | Done, turns on with your AWS keys |
-| Cron job: daily email about yesterday's requests | Done |
-| Queue for bulk emails | Simple built-in queue (bull/bee-queue would need a Redis server) |
-| Razorpay payments | Removed, as you asked |
-| Chat UI on /chat/:targetUserId with socket.io | Done |
-| Homework: improve the chat UI | Done |
-| Homework: auth in websockets | Done |
-| Homework: only friends can message | Done |
-| Homework: green dot when online + last seen | Done |
-| Homework: limit messages fetched from DB | Done (30 at a time) |
-| Project ideas: tic-tac-toe, chess | Not included (separate projects) |
-
----
-
-## What was changed from the original code
-
-**Login could never work in some setups.** The token was signed with a hardcoded secret but checked with `JWT_SECRET` from `.env`, so unless both matched, every request after login failed. Both now use `JWT_SECRET`.
-
-**Saving the profile never worked.** The frontend sent `PUT /profile/edit` but the backend only had `PATCH`. It now uses `PATCH`. Gender is a dropdown (the backend only accepts male, female or other), skills are typed as a comma list and saved as a real list, and empty fields no longer break the save.
-
-**Mac install problems.** `bcrypt` needs a native build that often fails on Macs, so it was swapped for `bcryptjs`, which works everywhere and reads the same password hashes. `nodemon` was not in the project, so `npm run dev` now uses Node's built-in `--watch`.
-
-**Ready for hosting.** The API address, allowed frontend address, port and secrets all come from environment variables instead of being hardcoded to `localhost`. Cookies are `httpOnly` and become https-only in production. Netlify gets the `/api` forwarding rule and the fallback rule that stops page refreshes on `/profile` or `/connections` from showing a 404.
-
-**Chat page added and made safe.** Each connection has a **Chat** button that opens a live chat. The old chat code trusted whatever user id the browser sent, so anyone could send messages as anyone, or read a stranger's chat. Now the server checks who you are with a short-lived login token, and only lets two matched users chat.
-
-**Features from the course notes added.** The online green dot and "last seen", loading chat messages 30 at a time instead of all at once, an email when someone is interested in you, the daily 8 AM reminder email (now in India time), and a simple email queue that sends one email at a time so Amazon SES doesn't reject them for going too fast. Each chat message is now saved as its own record, which is what makes loading 30 at a time possible, and messages typed very fast always stay in the right order.
-
-**Payments removed.** The Razorpay payment APIs, the payments collection, the premium fields on users and the `razorpay` package are gone.
-
-**Smaller fixes.** The password hash is no longer sent back to the browser. The database password is no longer printed in the logs. Login ignores upper and lower case in the email. A clear message shows for an email that is already registered. The daily email now goes to the real user instead of a hardcoded inbox. A crash in the requests API (`req.statusCode`) was fixed. First names can now be 2 letters (like "Ak"). Logging out clears the old feed so the next person does not see it. The UI uses a fixed dark theme so the inputs are readable in macOS light mode, works on phone screens, and shows a built-in avatar when a photo link is broken.
+**Shivam Deep**: [GitHub](https://github.com/YOUR_USERNAME) · [LinkedIn](https://www.linkedin.com/in/YOUR_PROFILE)
