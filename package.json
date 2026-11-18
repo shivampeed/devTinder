@@ -1,0 +1,15 @@
+{
+  "name": "devtinder",
+  "private": true,
+  "description": "DevTinder - run backend and frontend together",
+  "scripts": {
+    "postinstall": "npm install --prefix backend && npm install --prefix frontend",
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\""
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

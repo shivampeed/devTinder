@@ -1,0 +1,7 @@
+# Netlify reads this file when the site's Base directory is set to "frontend".
+[build]
+  command = "npm run build:netlify"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"

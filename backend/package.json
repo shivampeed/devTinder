@@ -1,0 +1,34 @@
+{
+  "name": "devtinder-backend",
+  "version": "1.0.0",
+  "description": "tinder for devs - API server",
+  "main": "src/app.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "keywords": [
+    "nodejs",
+    "javascript"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-ses": "^3.716.0",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.6.1",
+    "node-cron": "^4.6.0",
+    "razorpay": "^2.9.5",
+    "socket.io": "^4.8.1",
+    "validator": "^13.12.0"
+  }
+}
