@@ -1,91 +1,141 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useSelector } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import axios from "axios";
 import { BASE_URL } from "../utils/constants";
-import { createSocketConnection } from "../utils/socket";
+import { getSocket } from "../utils/socket";
 import { getErrorMessage } from "../utils/errors";
-import { DEFAULT_PHOTO, handleImageError } from "../utils/images";
-
-const formatTime = (date) =>
-  date
-    ? new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : "";
+import { formatTime } from "../utils/time";
+import { setManyPresence } from "../utils/presenceSlice";
+import { PresenceAvatar, PresenceText } from "./OnlineStatus";
 
 const ChatRoom = ({ targetUserId }) => {
   const user = useSelector((store) => store.user);
+  const dispatch = useDispatch();
   const [targetUser, setTargetUser] = useState(null);
   const [messages, setMessages] = useState([]);
-  // "loading" -> getting old messages, "ready" -> can chat, "blocked" -> not a connection, "error"
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // "loading" -> getting messages, "ready" -> can chat, "blocked" -> not a connection, "error"
   const [status, setStatus] = useState("loading");
   const [pageError, setPageError] = useState("");
   const [online, setOnline] = useState(false);
   const [chatError, setChatError] = useState("");
   const [text, setText] = useState("");
-  const socketRef = useRef(null);
   const listRef = useRef(null);
+  // After older messages are added on top, keep the view where it was instead of jumping
+  const scrollRestore = useRef(null);
+
+  const myId = String(user?._id);
 
   useEffect(() => {
-    const loadHistory = async () => {
+    const loadNewest = async () => {
       try {
         const res = await axios.get(BASE_URL + "/chat/" + targetUserId, {
           withCredentials: true,
         });
         setTargetUser(res.data.targetUser);
+        dispatch(setManyPresence([res.data.targetUser]));
         setMessages(res.data.messages);
+        setHasMore(res.data.hasMore);
         setStatus("ready");
       } catch (err) {
         setPageError(getErrorMessage(err));
         setStatus(err.response?.status === 403 ? "blocked" : "error");
       }
     };
-    loadHistory();
-  }, [targetUserId]);
+    loadNewest();
+  }, [targetUserId, dispatch]);
 
   useEffect(() => {
-    // Only open the live connection once we know this person is a connection
+    // Only join the live chat once we know this person is a connection
     if (status !== "ready") return;
 
-    const socket = createSocketConnection();
-    socketRef.current = socket;
+    const socket = getSocket();
 
-    // "connect" also fires after a dropped connection comes back, so we re-join the room every time
-    socket.on("connect", () => {
+    // "connect" also fires after a dropped connection comes back, so we re-join every time
+    const onConnect = () => {
       setOnline(true);
       setChatError("");
       socket.emit("joinChat", { targetUserId });
-    });
-    socket.on("disconnect", () => setOnline(false));
-    socket.on("connect_error", () => {
+    };
+    const onDisconnect = () => setOnline(false);
+    const onConnectError = () => {
       setOnline(false);
       setChatError("Can't connect to live chat right now. Retrying...");
-    });
-    socket.on("chatError", (message) => setChatError(message));
-    socket.on("messageReceived", (message) => {
+    };
+    const onChatError = (message) => setChatError(message);
+    const onMessage = (message) => {
+      // The one app-wide connection can carry other chats too; keep only this conversation
+      const pair = [String(message.senderId), String(message.receiverId)].sort().join("_");
+      if (pair !== [myId, String(targetUserId)].sort().join("_")) return;
       // Skip a message we already have, in case it arrives twice after a reconnect
       setMessages((prev) =>
         prev.some((m) => m._id === message._id) ? prev : [...prev, message]
       );
-    });
+    };
+
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.on("connect_error", onConnectError);
+    socket.on("chatError", onChatError);
+    socket.on("messageReceived", onMessage);
+    // Already connected (you came from another page), so the "connect" event won't fire again
+    if (socket.connected) {
+      queueMicrotask(onConnect);
+    }
 
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
+      socket.emit("leaveChat", { targetUserId });
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+      socket.off("connect_error", onConnectError);
+      socket.off("chatError", onChatError);
+      socket.off("messageReceived", onMessage);
     };
-  }, [status, targetUserId]);
+  }, [status, targetUserId, myId]);
 
-  useEffect(() => {
-    // Keep the newest message in view, like any chat app
-    if (listRef.current) {
-      listRef.current.scrollTop = listRef.current.scrollHeight;
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    if (scrollRestore.current) {
+      // Older messages were added above: move down by exactly how much the list grew
+      const { height, top } = scrollRestore.current;
+      list.scrollTop = list.scrollHeight - height + top;
+      scrollRestore.current = null;
+    } else {
+      // Keep the newest message in view, like any chat app
+      list.scrollTop = list.scrollHeight;
     }
   }, [messages]);
+
+  const loadEarlier = async () => {
+    if (loadingMore || messages.length === 0) return;
+    setLoadingMore(true);
+    try {
+      const res = await axios.get(
+        BASE_URL + "/chat/" + targetUserId + "?before=" + messages[0]._id,
+        { withCredentials: true }
+      );
+      const list = listRef.current;
+      scrollRestore.current = { height: list.scrollHeight, top: list.scrollTop };
+      setMessages((prev) => {
+        const known = new Set(prev.map((m) => m._id));
+        return [...res.data.messages.filter((m) => !known.has(m._id)), ...prev];
+      });
+      setHasMore(res.data.hasMore);
+    } catch (err) {
+      setChatError(getErrorMessage(err));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const sendMessage = (e) => {
     e.preventDefault();
     const clean = text.trim();
-    if (!clean || !online || !socketRef.current) return;
-    socketRef.current.emit("sendMessage", { targetUserId, text: clean });
+    if (!clean || !online) return;
+    getSocket().emit("sendMessage", { targetUserId, text: clean });
     setText("");
   };
 
@@ -115,30 +165,35 @@ const ChatRoom = ({ targetUserId }) => {
           <Link to="/connections" className="btn btn-ghost btn-sm">
             ←
           </Link>
-          <img
-            className="w-10 h-10 rounded-full object-cover"
-            src={targetUser?.photoUrl || DEFAULT_PHOTO}
-            alt="photo"
-            onError={handleImageError}
-          />
+          <PresenceAvatar user={targetUser} size="w-10 h-10" />
           <div className="flex-1">
             <h2 className="font-bold">
-              {targetUser?.firstName + " " + (targetUser?.lastName || "")}
+              {targetUser.firstName + " " + (targetUser.lastName || "")}
             </h2>
-            <p className="text-xs opacity-70">
-              {online ? "Live" : "Connecting..."}
-            </p>
+            <PresenceText user={targetUser} className="text-xs" />
           </div>
         </div>
 
         <div ref={listRef} className="h-[60vh] overflow-y-auto p-4">
+          {hasMore && (
+            <div className="flex justify-center mb-4">
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={loadEarlier}
+                disabled={loadingMore}
+              >
+                {loadingMore && <span className="loading loading-spinner loading-xs"></span>}
+                Load earlier messages
+              </button>
+            </div>
+          )}
           {messages.length === 0 && (
             <p className="text-center opacity-60 my-10">
-              No messages yet. Say hi to {targetUser?.firstName}!
+              No messages yet. Say hi to {targetUser.firstName}!
             </p>
           )}
           {messages.map((message) => {
-            const isMine = String(message.senderId) === String(user?._id);
+            const isMine = String(message.senderId) === myId;
             return (
               <div
                 key={message._id}
@@ -170,7 +225,7 @@ const ChatRoom = ({ targetUserId }) => {
             type="text"
             value={text}
             maxLength={1000}
-            placeholder="Type a message..."
+            placeholder={online ? "Type a message..." : "Connecting to chat..."}
             className="input flex-1"
             onChange={(e) => setText(e.target.value)}
           />

@@ -1,6 +1,22 @@
 const { SendEmailCommand } = require("@aws-sdk/client-ses");
 const { sesClient } = require("./sesClient.js");
 
+const isEmailConfigured = () =>
+  Boolean(
+    process.env.AWS_ACCESS_KEY &&
+      process.env.AWS_SECRET_KEY &&
+      process.env.SES_FROM_EMAIL
+  );
+
+// Names come from users, so a name like "<script>" must show as text, not run as HTML
+const escapeHtml = (text) =>
+  String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 const createSendEmailCommand = (toAddress, fromAddress, subject, body) => {
   return new SendEmailCommand({
     Destination: {
@@ -11,11 +27,11 @@ const createSendEmailCommand = (toAddress, fromAddress, subject, body) => {
       Body: {
         Html: {
           Charset: "UTF-8",
-          Data: `<h1>${body}</h1>`,
+          Data: `<h2>${escapeHtml(body)}</h2>`,
         },
         Text: {
           Charset: "UTF-8",
-          Data: "This is the text format email",
+          Data: body,
         },
       },
       Subject: {
@@ -24,9 +40,7 @@ const createSendEmailCommand = (toAddress, fromAddress, subject, body) => {
       },
     },
     Source: fromAddress,
-    ReplyToAddresses: [
-      /* more items */
-    ],
+    ReplyToAddresses: [],
   });
 };
 
@@ -50,5 +64,4 @@ const run = async (subject, body, toEmailId) => {
   }
 };
 
-// snippet-end:[ses.JavaScript.email.sendEmailV3]
-module.exports = { run };
+module.exports = { run, isEmailConfigured, escapeHtml };

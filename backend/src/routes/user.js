@@ -4,8 +4,11 @@ const userRouter = express.Router();
 const { userAuth } = require("../middlewares/auth");
 const ConnectionRequest = require("../models/connectionRequest");
 const User = require("../models/user");
+const { isOnline } = require("../utils/presence");
 
 const USER_SAFE_DATA = "firstName lastName photoUrl age gender about skills";
+// Only your connections get to see when you were last online, so it's added just for them
+const CONNECTION_DATA = USER_SAFE_DATA + " lastSeen";
 
 // Get all the pending connection request for the loggedIn user
 userRouter.get("/user/requests/received", userAuth, async (req, res) => {
@@ -38,17 +41,18 @@ userRouter.get("/user/connections", userAuth, async (req, res) => {
         { fromUserId: loggedInUser._id, status: "accepted" },
       ],
     })
-      .populate("fromUserId", USER_SAFE_DATA)
-      .populate("toUserId", USER_SAFE_DATA);
+      .populate("fromUserId", CONNECTION_DATA)
+      .populate("toUserId", CONNECTION_DATA);
 
     const data = connectionRequests
       // Skip rows where the other user was deleted, otherwise ._id below would crash
       .filter((row) => row.fromUserId && row.toUserId)
       .map((row) => {
-        if (row.fromUserId._id.toString() === loggedInUser._id.toString()) {
-          return row.toUserId;
-        }
-        return row.fromUserId;
+        const otherUser =
+          row.fromUserId._id.toString() === loggedInUser._id.toString()
+            ? row.toUserId
+            : row.fromUserId;
+        return { ...otherUser.toJSON(), isOnline: isOnline(otherUser._id) };
       });
 
     res.json({ data });

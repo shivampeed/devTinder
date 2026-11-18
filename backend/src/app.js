@@ -8,6 +8,7 @@ const http = require("http");
 
 const connectDB = require("./config/database");
 const allowedOrigins = require("./utils/allowedOrigins");
+const { isEmailConfigured } = require("./utils/sendEmail");
 
 // Fail fast with a clear message instead of a confusing crash later
 const requiredEnv = ["DB_CONNECTION_SECRET", "JWT_SECRET"];
@@ -31,21 +32,13 @@ app.use(
     credentials: true,
   })
 );
-app.use(
-  express.json({
-    // Razorpay signs the exact bytes it sent, so the webhook needs the raw body, not a re-stringified copy
-    verify: (req, res, buf) => {
-      req.rawBody = buf.toString();
-    },
-  })
-);
+app.use(express.json());
 app.use(cookieParser());
 
 const authRouter = require("./routes/auth");
 const profileRouter = require("./routes/profile");
 const requestRouter = require("./routes/request");
 const userRouter = require("./routes/user");
-const paymentRouter = require("./routes/payment");
 const chatRouter = require("./routes/chat");
 const initializeSocket = require("./utils/socket");
 
@@ -62,7 +55,6 @@ app.use("/", authRouter);
 app.use("/", profileRouter);
 app.use("/", requestRouter);
 app.use("/", userRouter);
-app.use("/", paymentRouter);
 app.use("/", chatRouter);
 
 // Catches errors like a broken JSON body so the client gets a clean message instead of an HTML stack trace
@@ -75,8 +67,9 @@ const server = http.createServer(app);
 initializeSocket(server);
 
 // The daily reminder email only makes sense when email sending is set up
-if (process.env.AWS_ACCESS_KEY && process.env.AWS_SECRET_KEY && process.env.SES_FROM_EMAIL) {
+if (isEmailConfigured()) {
   require("./utils/cronjob");
+  console.log("Email is set up: new-request emails and the daily reminder are on.");
 }
 
 const PORT = process.env.PORT || 7777;

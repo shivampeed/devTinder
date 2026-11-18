@@ -5,7 +5,7 @@ const { userAuth } = require("../middlewares/auth");
 const ConnectionRequest = require("../models/connectionRequest");
 const User = require("../models/user");
 
-const sendEmail = require("../utils/sendEmail");
+const { queueEmail } = require("../utils/emailQueue");
 
 requestRouter.post(
   "/request/send/:status/:toUserId",
@@ -48,11 +48,17 @@ requestRouter.post(
 
       const data = await connectionRequest.save();
 
-      // const emailRes = await sendEmail.run(
-      //   "A new friend request from " + req.user.firstName,
-      //   req.user.firstName + " is " + status + " in " + toUser.firstName
-      // );
-      // console.log(emailRes);
+      // Only "interested" is news worth an email; nobody needs to hear they were ignored.
+      // queueEmail does nothing unless email is set up in .env.
+      if (status === "interested") {
+        queueEmail({
+          subject: req.user.firstName + " is interested in you on DevTinder",
+          body:
+            req.user.firstName +
+            " wants to connect with you. Log in to DevTinder to accept or reject the request.",
+          toEmailId: toUser.emailId,
+        });
+      }
 
       res.json({
         message:

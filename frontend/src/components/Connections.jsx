@@ -2,9 +2,10 @@ import axios from "axios";
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { BASE_URL } from "../utils/constants";
-import { DEFAULT_PHOTO, handleImageError } from "../utils/images";
 import { useDispatch, useSelector } from "react-redux";
 import { addConnections } from "../utils/connectionsSlice";
+import { setManyPresence } from "../utils/presenceSlice";
+import { PresenceAvatar, PresenceText } from "./OnlineStatus";
 
 const Connections = () => {
   const connections = useSelector((store) => store.connections);
@@ -17,6 +18,7 @@ const Connections = () => {
           withCredentials: true,
         });
         dispatch(addConnections(res?.data?.data));
+        dispatch(setManyPresence(res?.data?.data || []));
       } catch (err) {
         console.error(err);
       }
@@ -40,24 +42,19 @@ const Connections = () => {
       <h1 className="font-bold text-2xl">Connections</h1>
 
       {connections.map((connection) => {
-        const { _id, firstName, lastName, photoUrl, age, gender, about } =
-          connection;
+        const { _id, firstName, lastName, age, gender, about } = connection;
 
         return (
           <div
             key={_id}
             className="flex items-center m-4 p-4 rounded-lg bg-base-300 w-full max-w-2xl mx-auto"
           >
-            <img
-              className="w-20 h-20 rounded-full object-cover shrink-0"
-              src={photoUrl || DEFAULT_PHOTO}
-              alt="photo"
-              onError={handleImageError}
-            />
+            <PresenceAvatar user={connection} />
             <div className="text-left mx-4 flex-1">
               <h2 className="font-bold text-xl">
                 {firstName + " " + (lastName || "")}
               </h2>
+              <PresenceText user={connection} />
               {age && gender && <p>{age + ", " + gender}</p>}
               <p>{about}</p>
             </div>

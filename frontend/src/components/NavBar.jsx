@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { Link, useNavigate } from "react-router-dom";
 import { BASE_URL } from "../utils/constants";
 import { removeUser } from "../utils/userSlice";
+import { disconnectSocket } from "../utils/socket";
 import { DEFAULT_PHOTO, handleImageError } from "../utils/images";
 
 const NavBar = () => {
@@ -17,6 +18,7 @@ const NavBar = () => {
       console.error(err);
     } finally {
       // Log out on this side even if the server call failed, so the user is never stuck logged in
+      disconnectSocket();
       dispatch(removeUser());
       navigate("/login");
     }

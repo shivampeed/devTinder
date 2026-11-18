@@ -53,12 +53,9 @@ const userSchema = new mongoose.Schema(
       //   }
       // },
     },
-    isPremium: {
-      type: Boolean,
-      default: false,
-    },
-    membershipType: {
-      type: String,
+    // Saved when the user's last open tab closes, for "last seen 2 hours ago"
+    lastSeen: {
+      type: Date,
     },
     photoUrl: {
       type: String,

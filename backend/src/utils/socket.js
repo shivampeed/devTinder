@@ -1,10 +1,11 @@
 const socket = require("socket.io");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const { Chat } = require("../models/chat");
+const { Message, getOrCreateChat } = require("../models/chat");
 const User = require("../models/user");
 const allowedOrigins = require("./allowedOrigins");
-const { areConnected } = require("./connections");
+const { areConnected, getConnectionIds } = require("./connections");
+const { markOnline, markOffline } = require("./presence");
 
 const MAX_MESSAGE_LENGTH = 1000;
 
@@ -15,6 +16,9 @@ const getSecretRoomId = (userId, targetUserId) => {
     .digest("hex");
 };
 
+// Every user's tabs join their own private room, so we can send news to "this person"
+const personalRoom = (userId) => "user:" + userId;
+
 const initializeSocket = (server) => {
   const io = socket(server, {
     cors: {
@@ -23,6 +27,17 @@ const initializeSocket = (server) => {
       credentials: true,
     },
   });
+
+  // Tells this user's connections (and only them) that they came online or went offline
+  const announcePresence = async (userId, isOnline, lastSeen) => {
+    const friendIds = await getConnectionIds(userId);
+    if (friendIds.length === 0) return;
+    io.to(friendIds.map(personalRoom)).emit("presenceChanged", {
+      userId: String(userId),
+      isOnline,
+      lastSeen,
+    });
+  };
 
   // Runs once per connection: who is this? Without it anyone could send messages as anyone.
   io.use(async (socket, next) => {
@@ -53,6 +68,11 @@ const initializeSocket = (server) => {
     const me = socket.data.user;
     const myId = me._id.toString();
 
+    socket.join(personalRoom(myId));
+    if (markOnline(myId)) {
+      announcePresence(myId, true).catch((err) => console.log(err));
+    }
+
     socket.on("joinChat", async ({ targetUserId } = {}) => {
       try {
         if (!targetUserId || !(await areConnected(myId, targetUserId))) {
@@ -67,7 +87,13 @@ const initializeSocket = (server) => {
       }
     });
 
-    socket.on("sendMessage", async ({ targetUserId, text } = {}) => {
+    // The page calls this when you leave a chat, so its messages stop arriving in the next one
+    socket.on("leaveChat", ({ targetUserId } = {}) => {
+      if (!targetUserId) return;
+      socket.leave(getSecretRoomId(myId, String(targetUserId)));
+    });
+
+    const handleSendMessage = async ({ targetUserId, text } = {}) => {
       try {
         const target = String(targetUserId || "");
         // Must have joined this chat first, which is where the connection check happens
@@ -83,29 +109,18 @@ const initializeSocket = (server) => {
           return;
         }
 
-        let chat = await Chat.findOne({
-          participants: { $all: [myId, target] },
-        });
-
-        if (!chat) {
-          chat = new Chat({
-            participants: [myId, target],
-            messages: [],
-          });
-        }
-
-        chat.messages.push({
+        const chat = await getOrCreateChat(myId, target);
+        const saved = await Message.create({
+          chatId: chat._id,
           senderId: myId,
           text: cleanText,
         });
-
-        await chat.save();
-        const saved = chat.messages[chat.messages.length - 1];
 
         // Sender details come from the logged-in user, never from what the browser claims
         io.to(getSecretRoomId(myId, target)).emit("messageReceived", {
           _id: saved._id,
           senderId: myId,
+          receiverId: target,
           firstName: me.firstName,
           lastName: me.lastName,
           text: saved.text,
@@ -115,9 +130,26 @@ const initializeSocket = (server) => {
         console.log(err);
         socket.emit("chatError", "Message could not be sent");
       }
+    };
+
+    // Saving a message takes a moment; if you type fast, the next one could finish first
+    // and show up out of order. Chaining them makes each message wait for the one before it.
+    let sendQueue = Promise.resolve();
+    socket.on("sendMessage", (payload) => {
+      sendQueue = sendQueue.then(() => handleSendMessage(payload));
     });
 
-    socket.on("disconnect", () => {});
+    socket.on("disconnect", async () => {
+      try {
+        if (markOffline(myId)) {
+          const lastSeen = new Date();
+          await User.updateOne({ _id: myId }, { lastSeen });
+          await announcePresence(myId, false, lastSeen);
+        }
+      } catch (err) {
+        console.log(err);
+      }
+    });
   });
 };
 

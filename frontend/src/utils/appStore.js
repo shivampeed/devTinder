@@ -3,12 +3,14 @@ import userReducer, { removeUser } from "./userSlice";
 import feedReducer from "./feedSlice";
 import connectionsReducer from "./connectionsSlice";
 import requestReducer from "./requestSlice";
+import presenceReducer from "./presenceSlice";
 
 const appReducer = combineReducers({
   user: userReducer,
   feed: feedReducer,
   connections: connectionsReducer,
   requests: requestReducer,
+  presence: presenceReducer,
 });
 
 const rootReducer = (state, action) => {

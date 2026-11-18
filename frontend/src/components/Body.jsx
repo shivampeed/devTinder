@@ -5,6 +5,8 @@ import axios from "axios";
 import { BASE_URL } from "../utils/constants";
 import { useDispatch, useSelector } from "react-redux";
 import { addUser } from "../utils/userSlice";
+import { setPresence } from "../utils/presenceSlice";
+import { getSocket } from "../utils/socket";
 import Footer from "./Footer";
 
 const RETRY_EVERY_MS = 5000;
@@ -57,6 +59,18 @@ const Body = () => {
     // Runs once on page load; after that, Login and Logout update the store themselves
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const userId = userData?._id;
+  useEffect(() => {
+    // Open the live connection as soon as someone is logged in, so their connections see them online
+    if (!userId) return;
+    const socket = getSocket();
+    const onPresence = (update) => dispatch(setPresence(update));
+    socket.on("presenceChanged", onPresence);
+    return () => {
+      socket.off("presenceChanged", onPresence);
+    };
+  }, [userId, dispatch]);
 
   useEffect(() => {
     // Every page except /login needs a logged-in user

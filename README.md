@@ -136,9 +136,31 @@ If the Netlify build stops with "BACKEND_URL is not set", add the variable from 
 
 **Updating the site** is just `git add . && git commit -m "my change" && git push`. Render and Netlify both rebuild on their own.
 
-**Optional features.** The backend also has premium payments (Razorpay) and a daily email (AWS SES). They are switched off until you add their keys (see `backend/.env.example`). The app runs fine without them.
+**Emails are optional.** Email sending is switched off until you add your AWS keys (see "Turning on emails" below). The app runs fine without it.
 
-**Chat works online with no extra settings.** Netlify's `/api` forwarding can't carry live chat connections, so the chat page connects straight to your Render address. It gets that address from the same `BACKEND_URL` variable when Netlify builds the site. If you change `BACKEND_URL` later, click **Trigger deploy** in Netlify so the chat picks up the new address.
+**Chat and online status work online with no extra settings.** Netlify's `/api` forwarding can't carry live chat connections, so the chat page connects straight to your Render address. It gets that address from the same `BACKEND_URL` variable when Netlify builds the site. If you change `BACKEND_URL` later, click **Trigger deploy** in Netlify so the chat picks up the new address.
+
+### Optional: your own domain name (like devtinder.in)
+
+1. Buy a domain from any seller (GoDaddy, Namecheap, Hostinger and so on).
+2. In Netlify, open your site, go to **Domain management**, and click **Add a domain**. Type your domain and follow the steps.
+3. Netlify shows you exactly which DNS records to add. You can either switch your domain's nameservers to Netlify (simplest), or add the records at your domain seller or at Cloudflare. If you use Cloudflare like in the course notes, set the records to **DNS only** (grey cloud), so Netlify can create the HTTPS certificate.
+4. Wait for DNS to update (from a few minutes to a few hours). Netlify then turns on HTTPS by itself.
+
+Nothing in the code or on Render needs to change, because the site keeps calling `/api` on whatever domain it's opened from.
+
+### Optional: turning on emails (Amazon SES)
+
+With email on, people get an email when someone clicks **Interested** on them, and a reminder at 8 AM (India time) if they got requests the day before.
+
+1. In AWS, open **Amazon SES** in the **Mumbai (ap-south-1)** region and verify the email address (or domain) you'll send from.
+2. New SES accounts start in "sandbox" mode, where you can only send to addresses you've verified too. To email anyone, request **production access** in SES.
+3. In **IAM**, create a user with the `AmazonSESFullAccess` permission, then create an **access key** for it under Security credentials.
+4. Add these to `backend/.env` on your Mac, and to Render's environment variables when you deploy:
+   - `AWS_ACCESS_KEY` and `AWS_SECRET_KEY` = the access key from step 3
+   - `SES_FROM_EMAIL` = the address you verified in step 1
+
+The server prints "Email is set up" when it starts if it found them. On Render's free plan the server sleeps when nobody is using it, so the 8 AM reminder only runs if the server happens to be awake then.
 
 ---
 
@@ -152,9 +174,32 @@ If the Netlify build stops with "BACKEND_URL is not set", add the variable from 
 
 **Requests.** People who were Interested in you. **Accept** makes you connections.
 
-**Connections > Chat.** Real-time messages with anyone you're connected to. Messages are saved, so they're still there after a refresh. People who aren't your connections can't open your chat.
+**Connections.** Everyone you've matched with. A **green dot** and "Online" mean they have DevTinder open right now; otherwise it says "Last seen 2 hours ago". Only your connections can see this about you.
+
+**Chat** (the button on each connection). Real-time messages. The newest 30 load first; scroll up and click **Load earlier messages** for older ones. People who aren't your connections can't open your chat.
 
 To try it alone, sign up a second account in a private window (**Cmd + Shift + N**), so both accounts stay logged in at the same time.
+
+---
+
+## Your course notes vs this project
+
+| From the notes | Status |
+|---|---|
+| Frontend: router, login, Redux, feed, profile, toast, connections, requests, signup | Done |
+| Deployment (AWS EC2 + nginx + pm2) | Done differently: Netlify + Render (Part 2), free and simpler |
+| Custom domain | Steps above, using Netlify instead of nginx |
+| Emails with Amazon SES, made dynamic | Done, turns on with your AWS keys |
+| Cron job: daily email about yesterday's requests | Done |
+| Queue for bulk emails | Simple built-in queue (bull/bee-queue would need a Redis server) |
+| Razorpay payments | Removed, as you asked |
+| Chat UI on /chat/:targetUserId with socket.io | Done |
+| Homework: improve the chat UI | Done |
+| Homework: auth in websockets | Done |
+| Homework: only friends can message | Done |
+| Homework: green dot when online + last seen | Done |
+| Homework: limit messages fetched from DB | Done (30 at a time) |
+| Project ideas: tic-tac-toe, chess | Not included (separate projects) |
 
 ---
 
@@ -166,8 +211,12 @@ To try it alone, sign up a second account in a private window (**Cmd + Shift + N
 
 **Mac install problems.** `bcrypt` needs a native build that often fails on Macs, so it was swapped for `bcryptjs`, which works everywhere and reads the same password hashes. `nodemon` was not in the project, so `npm run dev` now uses Node's built-in `--watch`.
 
-**Ready for hosting.** The API address, allowed frontend address, port and secrets all come from environment variables instead of being hardcoded to `localhost`. Cookies are `httpOnly` and become https-only in production. Netlify gets the `/api` forwarding rule and the fallback rule that stops page refreshes on `/profile` or `/connections` from showing a 404. The server no longer crashes on start when the Razorpay keys are missing.
+**Ready for hosting.** The API address, allowed frontend address, port and secrets all come from environment variables instead of being hardcoded to `localhost`. Cookies are `httpOnly` and become https-only in production. Netlify gets the `/api` forwarding rule and the fallback rule that stops page refreshes on `/profile` or `/connections` from showing a 404.
 
 **Chat page added and made safe.** Each connection has a **Chat** button that opens a live chat. The old chat code trusted whatever user id the browser sent, so anyone could send messages as anyone, or read a stranger's chat. Now the server checks who you are with a short-lived login token, and only lets two matched users chat.
+
+**Features from the course notes added.** The online green dot and "last seen", loading chat messages 30 at a time instead of all at once, an email when someone is interested in you, the daily 8 AM reminder email (now in India time), and a simple email queue that sends one email at a time so Amazon SES doesn't reject them for going too fast. Each chat message is now saved as its own record, which is what makes loading 30 at a time possible, and messages typed very fast always stay in the right order.
+
+**Payments removed.** The Razorpay payment APIs, the payments collection, the premium fields on users and the `razorpay` package are gone.
 
 **Smaller fixes.** The password hash is no longer sent back to the browser. The database password is no longer printed in the logs. Login ignores upper and lower case in the email. A clear message shows for an email that is already registered. The daily email now goes to the real user instead of a hardcoded inbox. A crash in the requests API (`req.statusCode`) was fixed. First names can now be 2 letters (like "Ak"). Logging out clears the old feed so the next person does not see it. The UI uses a fixed dark theme so the inputs are readable in macOS light mode, works on phone screens, and shows a built-in avatar when a photo link is broken.
